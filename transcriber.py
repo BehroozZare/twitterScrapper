@@ -118,6 +118,8 @@ def extract_audio_from_videos(
     input_path: Path,
     output_dir: Path | None = None,
     skip_existing: bool = True,
+    clean_audio: bool = False,
+    trim_silence: bool = False,
 ) -> None:
     """
     Extract audio from video files and save as voice files.
@@ -126,6 +128,8 @@ def extract_audio_from_videos(
         input_path: Path to a video file or directory containing videos
         output_dir: Directory to save audio files (default: same as video)
         skip_existing: Skip videos that already have extracted audio
+        clean_audio: Apply denoise + normalization filters during extraction
+        trim_silence: Trim leading/trailing silence (conservative thresholds)
     """
     # Find video files
     video_files = find_video_files(input_path)
@@ -168,7 +172,12 @@ def extract_audio_from_videos(
         try:
             # Extract audio
             print(f"  Extracting audio...")
-            audio_extractor.extract_audio(str(video_path), str(voice_path))
+            audio_extractor.extract_audio(
+                str(video_path),
+                str(voice_path),
+                clean_audio=clean_audio,
+                trim_silence=trim_silence,
+            )
             print(f"  Saved: {voice_name}")
             successful += 1
             
@@ -218,6 +227,11 @@ def transcribe_audio_files(
     update_json: bool = False,
     output_dir: Path | None = None,
     skip_existing: bool = True,
+    model: str | None = None,
+    prompt: str | None = None,
+    temperature: float | None = None,
+    clean_audio: bool = True,
+    trim_silence: bool = True,
 ) -> None:
     """
     Transcribe audio files to subtitles using OpenAI Whisper API.
@@ -227,6 +241,11 @@ def transcribe_audio_files(
         update_json: Whether to update corresponding JSON files with transcripts
         output_dir: Directory to save subtitle files (default: same as audio)
         skip_existing: Skip audio files that already have subtitles
+        model: OpenAI transcription model override
+        prompt: Optional transcription prompt (hints)
+        temperature: Optional decoding temperature
+        clean_audio: Apply FFmpeg cleanup before upload (denoise + normalize)
+        trim_silence: Trim leading/trailing silence before upload
     """
     # Find audio files
     audio_files = find_audio_files(input_path)
@@ -240,7 +259,13 @@ def transcribe_audio_files(
     
     # Initialize transcriber
     print("\nInitializing OpenAI Whisper transcriber...")
-    transcriber = OpenAITranscriber()
+    transcriber = OpenAITranscriber(
+        model=model,
+        prompt=prompt,
+        temperature=temperature,
+        clean_audio=clean_audio,
+        trim_silence=trim_silence,
+    )
     
     # Process each audio file
     successful = 0
@@ -346,6 +371,13 @@ Output files:
 
 Required environment variable:
   OPENAI_API_KEY - Your OpenAI API key for Whisper transcription
+
+Optional environment variables:
+  OPENAI_TRANSCRIBE_MODEL - Override transcription model (default: gpt-4o-mini-transcribe; fallback to whisper-1)
+  OPENAI_TRANSCRIBE_PROMPT - Optional hint/prompt for better Persian transcription
+  OPENAI_TRANSCRIBE_TEMPERATURE - Optional decoding temperature (e.g. 0 or 0.2)
+  TRANSCRIBE_CLEAN_AUDIO - 1/true to enable FFmpeg cleanup (default: true)
+  TRANSCRIBE_TRIM_SILENCE - 1/true to trim leading/trailing silence (default: true)
         """,
     )
     
@@ -377,6 +409,18 @@ Required environment variable:
         "--no-skip",
         action="store_true",
         help="Re-extract audio even if voice file exists",
+    )
+    
+    extract_parser.add_argument(
+        "--clean-audio",
+        action="store_true",
+        help="Apply denoise + normalization filters during extraction",
+    )
+    
+    extract_parser.add_argument(
+        "--trim-silence",
+        action="store_true",
+        help="Trim leading/trailing silence during extraction (conservative thresholds)",
     )
     
     # =========================
@@ -413,6 +457,57 @@ Required environment variable:
         help="Re-transcribe audio even if subtitle exists",
     )
     
+    transcribe_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="OpenAI transcription model override (else uses OPENAI_TRANSCRIBE_MODEL or default)",
+    )
+    
+    transcribe_parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Optional transcription prompt/hints (else uses OPENAI_TRANSCRIBE_PROMPT)",
+    )
+    
+    transcribe_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Decoding temperature (else uses OPENAI_TRANSCRIBE_TEMPERATURE). Lower is more deterministic.",
+    )
+    
+    transcribe_parser.add_argument(
+        "--clean-audio",
+        dest="clean_audio",
+        action="store_true",
+        default=True,
+        help="Enable FFmpeg cleanup before upload (default: enabled)",
+    )
+    
+    transcribe_parser.add_argument(
+        "--no-clean-audio",
+        dest="clean_audio",
+        action="store_false",
+        help="Disable FFmpeg cleanup before upload",
+    )
+    
+    transcribe_parser.add_argument(
+        "--trim-silence",
+        dest="trim_silence",
+        action="store_true",
+        default=True,
+        help="Trim leading/trailing silence before upload (default: enabled)",
+    )
+    
+    transcribe_parser.add_argument(
+        "--no-trim-silence",
+        dest="trim_silence",
+        action="store_false",
+        help="Disable silence trimming before upload",
+    )
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -431,6 +526,8 @@ Required environment variable:
             input_path=args.input,
             output_dir=args.output,
             skip_existing=not args.no_skip,
+            clean_audio=args.clean_audio,
+            trim_silence=args.trim_silence,
         )
     elif args.command == "transcribe":
         transcribe_audio_files(
@@ -438,6 +535,11 @@ Required environment variable:
             update_json=args.update_json,
             output_dir=args.output,
             skip_existing=not args.no_skip,
+            model=args.model,
+            prompt=args.prompt,
+            temperature=args.temperature,
+            clean_audio=args.clean_audio,
+            trim_silence=args.trim_silence,
         )
 
 
